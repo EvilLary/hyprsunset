@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <format>
+#include <hyprutils/string/VarList.hpp>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -95,29 +96,28 @@ bool CIPCSocket::mainThreadParseRequest() {
     if (!m_bRequestReady)
         return false;
 
-    std::string copy = m_szRequest;
+    auto argsList = Hyprutils::String::CVarList(m_szRequest, 0, ' ', true);
 
-    if (copy == "")
+    if (argsList.size() == 0)
         return false;
 
-    // now we can work on the copy
-
-    Debug::log(LOG, "Received a request: {}", copy);
+    Debug::log(LOG, "Received a request: {}", argsList);
 
     // set default reply
     m_szReply       = "ok";
     m_bReplyReady   = true;
     m_bRequestReady = false;
 
+    const auto ARGS_COUNT = argsList.size();
+
     // config commands
-    if (copy.find("gamma") == 0) {
-        int spaceSeparator = copy.find_first_of(' ');
-        if (spaceSeparator == -1) {
+    if (argsList[0] == "gamma") {
+        if (ARGS_COUNT == 1) {
             m_szReply = std::to_string(g_pHyprsunset->GAMMA * 100);
             return false;
         }
 
-        std::string args     = copy.substr(spaceSeparator + 1);
+        std::string args     = argsList[1];
         float       gamma    = g_pHyprsunset->GAMMA * 100;
         float       maxGamma = g_pHyprsunset->MAX_GAMMA * 100;
         try {
@@ -143,28 +143,28 @@ bool CIPCSocket::mainThreadParseRequest() {
         return true;
     }
 
-    if (copy.find("temperature") == 0) {
-        int spaceSeparator = copy.find_first_of(' ');
-        if (spaceSeparator == -1) {
+    if (argsList[0] == "temperature") {
+        if (ARGS_COUNT == 1) {
             m_szReply = std::to_string(g_pHyprsunset->KELVIN);
             return false;
         }
 
-        std::string        args   = copy.substr(spaceSeparator + 1);
-        unsigned long long kelvin = g_pHyprsunset->KELVIN;
+        std::string args   = argsList[1];
+        size_t      kelvin = g_pHyprsunset->KELVIN;
         try {
             if (args[0] == '+' || args[0] == '-') {
                 if (args[0] == '-')
                     kelvin -= std::stoull(args.substr(1));
                 else
                     kelvin += std::stoull(args.substr(1));
-                kelvin = std::clamp(kelvin, 1000ull, 20000ull);
+                kelvin = std::clamp(kelvin, 1000ul, 20000ul);
             } else
-                kelvin = std::stoull(args);
+                kelvin = std::stoul(args);
         } catch (std::exception& e) {
             m_szReply = "Invalid temperature (should be an integer in range 1000-20000)";
             return false;
         }
+
         if (kelvin < 1000 || kelvin > 20000) {
             m_szReply = "Invalid temperature (should be an integer in range 1000-20000)";
             return false;
@@ -175,14 +175,13 @@ bool CIPCSocket::mainThreadParseRequest() {
         return true;
     }
 
-    if (copy.find("identity") == 0) {
-        int spaceSeparator = copy.find_first_of(' ');
-        if (spaceSeparator == -1) {
+    if (argsList[0] == "identity") {
+        if (ARGS_COUNT == 1) {
             g_pHyprsunset->identity = true;
             return true;
         }
 
-        std::string args = copy.substr(spaceSeparator + 1);
+        std::string args = argsList[1];
         if (args == "get") {
             m_szReply = g_pHyprsunset->identity ? "true" : "false";
             return false;
@@ -198,46 +197,52 @@ bool CIPCSocket::mainThreadParseRequest() {
         }
     }
 
-    if (copy.find("reset") == 0) {
-        int spaceSeparator = copy.find_first_of(' ');
-
+    if (argsList[0] == "reset") {
         // Reset whole profile
-        if (spaceSeparator == -1) {
+        if (ARGS_COUNT == 1) {
             g_pHyprsunset->loadCurrentProfile();
             return true;
         }
 
-        SSunsetProfile profile = g_pHyprsunset->getCurrentProfile();
+        if (auto profile_opt = g_pHyprsunset->getCurrentProfile()) {
+            auto        profile = profile_opt.value();
 
-        std::string    args = copy.substr(spaceSeparator + 1);
-
-        if (args == "temperature") {
-            g_pHyprsunset->KELVIN = profile.temperature;
-            return true;
-        } else if (args == "gamma") {
-            g_pHyprsunset->GAMMA = profile.gamma;
-            return true;
-        } else if (args == "identity") {
-            g_pHyprsunset->identity = profile.identity;
-            return true;
-        } else {
-            m_szReply = "Invalid reset value (should be either temperature, gamma or identity)";
-            return false;
+            std::string args = argsList[1];
+            if (args == "temperature") {
+                g_pHyprsunset->KELVIN = profile.temperature;
+                return true;
+            } else if (args == "gamma") {
+                g_pHyprsunset->GAMMA = profile.gamma;
+                return true;
+            } else if (args == "identity") {
+                g_pHyprsunset->identity = profile.identity;
+                return true;
+            } else {
+                m_szReply = "Invalid reset value (should be either temperature, gamma or identity)";
+                return false;
+            }
         }
+
+        m_szReply = "No profile is currently loaded";
+        return false;
     }
 
-    if (copy.find("profile") == 0) {
-        SSunsetProfile profile = g_pHyprsunset->getCurrentProfile();
+    if (argsList[0] == "profile") {
+        if (auto profile_opt = g_pHyprsunset->getCurrentProfile()) {
+            auto  profile = profile_opt.value();
 
-        int            hrs   = profile.time.hour.count();
-        int            mins  = profile.time.minute.count();
-        auto           temp  = profile.temperature;
-        float          gamma = profile.gamma;
-        bool           ident = profile.identity;
+            int   hrs   = profile.time.hour.count();
+            int   mins  = profile.time.minute.count();
+            auto  temp  = profile.temperature;
+            float gamma = profile.gamma;
+            bool  ident = profile.identity;
 
-        m_szReply = std::format("Time: {:0>2}:{:0>2}\nTemperature: {}\nGamma: {}\nIdentity: {}", hrs, mins, temp, gamma, ident);
+            m_szReply = std::format("Time: {:0>2}:{:0>2}\nTemperature: {}\nGamma: {}\nIdentity: {}", hrs, mins, temp, gamma, ident);
+            return true;
+        }
 
-        return true;
+        m_szReply = "No profile is currently loaded";
+        return false;
     }
 
     m_szReply = "invalid command";

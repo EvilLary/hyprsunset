@@ -41,10 +41,10 @@ std::vector<SSunsetProfile> CConfigManager::getSunsetProfiles() {
     result.reserve(keys.size());
 
     for (auto& key : keys) {
-        std::string   time;
-        unsigned long temperature;
-        float         gamma;
-        bool          identity;
+        std::string time;
+        size_t      temperature;
+        float       gamma;
+        bool        identity;
 
         try {
             time        = std::any_cast<Hyprlang::STRING>(m_config.getSpecialConfigValue("profile", "time", key.c_str()));
@@ -59,15 +59,17 @@ std::vector<SSunsetProfile> CConfigManager::getSunsetProfiles() {
 
         size_t separator = time.find(':');
 
-        if (separator == std::string::npos)
-            RASSERT(false, "Invalid time format for profile {}", key);
+        if (separator == std::string::npos) {
+            Debug::log(ERR, "Invalid time format: {}, skipping profile {}", time, key);
+            continue;
+        }
 
         int hour = 0, minute = 0;
         try {
             hour   = std::stoi(time.substr(0, separator));
             minute = std::stoi(time.substr(separator + 1).c_str());
         } catch (const std::exception& e) {
-            Debug::log(ERR, "Invalid time format: {}, skipping this profile", time);
+            Debug::log(ERR, "Invalid time format: {}, skipping profile {}", time, key);
             continue;
         }
 

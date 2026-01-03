@@ -44,19 +44,19 @@ struct SSunsetProfile {
 
 class CHyprsunset {
   public:
-    float              MAX_GAMMA = 1.0f; // default
-    float              GAMMA     = 1.0f; // default
-    unsigned long long KELVIN    = 6000; // default
-    bool               kelvinSet = false, identity = false;
-    SState             state;
-    bool               m_bTerminate = false;
+    float                         MAX_GAMMA = 1.0f; // default
+    float                         GAMMA     = 1.0f; // default
+    size_t                        KELVIN    = 6000; // default
+    bool                          kelvinSet = false, identity = false;
+    SState                        state;
+    bool                          m_bTerminate = false;
 
-    int                calculateMatrix();
-    int                init();
-    void               tick();
-    void               loadCurrentProfile();
-    SSunsetProfile     getCurrentProfile();
-    void               terminate();
+    int                           calculateMatrix();
+    int                           init();
+    void                          tick();
+    void                          loadCurrentProfile();
+    std::optional<SSunsetProfile> getCurrentProfile();
+    void                          terminate();
 
     struct {
         std::condition_variable loopSignal;
@@ -68,7 +68,7 @@ class CHyprsunset {
     } m_sEventLoopInternals;
 
   private:
-    static void                 commitCTMs();
+    void                        commitCTMs();
     void                        reload();
     void                        schedule();
     int                         currentProfile();

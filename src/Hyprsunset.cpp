@@ -3,6 +3,7 @@
 #include "IPCSocket.hpp"
 #include <cstring>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <chrono>
 #include <sys/poll.h>
@@ -38,7 +39,7 @@ static void timespecAddNs(timespec* pTimespec, int64_t delta) {
 }
 
 // kindly borrowed from https://tannerhelland.com/2012/09/18/convert-temperature-rgb-algorithm-code.html
-static Mat3x3 matrixForKelvin(unsigned long long temp) {
+static Mat3x3 matrixForKelvin(size_t temp) {
     float r = 1.F, g = 1.F, b = 1.F;
 
     temp /= 100;
@@ -67,7 +68,7 @@ void SOutput::applyCTM(struct SState* state) {
 }
 
 void CHyprsunset::commitCTMs() {
-    g_pHyprsunset->state.pCTMMgr->sendCommit();
+    state.pCTMMgr->sendCommit();
 }
 
 int CHyprsunset::calculateMatrix() {
@@ -84,7 +85,7 @@ int CHyprsunset::calculateMatrix() {
     if (!identity)
         Debug::log(NONE, "┣ Setting the temperature to {}K{}\n┃", KELVIN, kelvinSet ? "" : " (default)");
     else
-        Debug::log(NONE, "┣ Resetting the matrix (--identity passed)\n┃", KELVIN, kelvinSet ? "" : " (default)");
+        Debug::log(NONE, "┣ Resetting the matrix (--identity passed)\n┃");
 
     // calculate the matrix
     state.ctm = identity ? Mat3x3::identity() : matrixForKelvin(KELVIN);
@@ -103,7 +104,7 @@ int CHyprsunset::init() {
     state.wlDisplay = wl_display_connect(nullptr);
 
     if (!state.wlDisplay) {
-        Debug::log(NONE, "✖ Couldn't connect to a wayland compositor", KELVIN);
+        Debug::log(NONE, "✖ Couldn't connect to a wayland compositor");
         return 0;
     }
 
@@ -133,7 +134,7 @@ int CHyprsunset::init() {
                 makeShared<SOutput>(makeShared<CCWlOutput>((wl_proxy*)wl_registry_bind((wl_registry*)state.pRegistry->resource(), name, &wl_output_interface, 3)), name));
 
             if (state.initialized) {
-                Debug::log(NONE, "┣ already initialized, applying CTM instantly", name);
+                Debug::log(NONE, "┣ already initialized, applying CTM instantly");
                 o->applyCTM(&state);
                 commitCTMs();
             }
@@ -145,7 +146,7 @@ int CHyprsunset::init() {
     wl_display_roundtrip(state.wlDisplay);
 
     if (!state.pCTMMgr) {
-        Debug::log(NONE, "✖ Compositor doesn't support hyprland-ctm-control-v1, are you running on Hyprland?", KELVIN);
+        Debug::log(NONE, "✖ Compositor doesn't support hyprland-ctm-control-v1, are you running on Hyprland?");
         return 0;
     }
 
@@ -183,27 +184,30 @@ void CHyprsunset::startEventLoop() {
 
     std::thread pollThread([&]() {
         while (1) {
-            bool preparedToRead = wl_display_prepare_read(state.wlDisplay) == 0;
-            int  ret            = 0;
+            int ret = poll(pollfds, 2, 5000);
+
+            if (ret < 0) {
+                Debug::log(ERR, "[core] Polling fds failed with {}", errno);
+                wl_display_cancel_read(state.wlDisplay);
+                continue;
+            }
+
+            for (size_t i = 0; i < 2; ++i) {
+                if ((pollfds[i].revents & POLLHUP)) {
+                    Debug::log(ERR, "[core] Disconnected from pollfd id {}", i);
+                    terminate();
+                }
+            }
 
             if (m_bTerminate)
                 break;
 
-            if (preparedToRead) {
-                ret = poll(pollfds, 2, 5000);
+            bool preparedToRead = wl_display_prepare_read(state.wlDisplay) == 0;
 
-                if (ret < 0) {
-                    RASSERT(errno == EINTR, "[core] Polling fds failed with {}", errno);
-                    wl_display_cancel_read(state.wlDisplay);
-                    continue;
-                }
-
-                for (size_t i = 0; i < 2; ++i) {
-                    RASSERT(!(pollfds[i].revents & POLLHUP), "[core] Disconnected from pollfd id {}", i);
-                }
-
+            if (preparedToRead)
                 wl_display_read_events(state.wlDisplay);
-            }
+            else
+                wl_display_cancel_read(state.wlDisplay);
 
             if (ret > 0 || !preparedToRead) {
                 Debug::log(TRACE, "[core] got poll event");
@@ -330,8 +334,12 @@ int CHyprsunset::currentProfile() {
     return profiles.size() - 1;
 }
 
-SSunsetProfile CHyprsunset::getCurrentProfile() {
-    return profiles[currentProfile()];
+std::optional<SSunsetProfile> CHyprsunset::getCurrentProfile() {
+    auto current_profile = currentProfile();
+    if (current_profile < 0)
+        return std::nullopt;
+
+    return profiles[current_profile];
 }
 
 void CHyprsunset::schedule() {
